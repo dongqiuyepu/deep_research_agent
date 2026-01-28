@@ -1,4 +1,4 @@
-# AI Deep Research Agent - Starter Kit
+# 行业调研Deep Agent
 
 A structured starter kit for building an AI deep research agent training program. This project uses only the OpenAI library for LLM interaction, allowing trainees to implement custom agent logic from scratch.
 
