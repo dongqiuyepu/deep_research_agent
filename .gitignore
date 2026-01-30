@@ -12,3 +12,6 @@ build/
 .venv/
 venv/
 env/
+data/chroma_db/
+data/documents/
+src/reports/
