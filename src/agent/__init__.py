@@ -2,8 +2,12 @@
 
 from .research_agent import ResearchAgent
 from .prompt_builder import PromptBuilder
+from .react_engine import ReActEngine, ResearchTrajectory, TrajectoryStep
 
 __all__ = [
     "ResearchAgent",
-    "PromptBuilder"
+    "PromptBuilder",
+    "ReActEngine",
+    "ResearchTrajectory",
+    "TrajectoryStep"
 ]

@@ -5,8 +5,11 @@ import re
 
 from knowledge_base import KnowledgeBaseManager, Evidence
 from tools import WebSearchTool
+from tools.tool_registry import ToolRegistry
+from tools.research_tools import create_research_tools
 from memory import ConversationMemory
 from agent.prompt_builder import PromptBuilder
+from agent.react_engine import ReActEngine
 
 
 class ResearchAgent:
@@ -35,14 +38,102 @@ class ResearchAgent:
         self.prompt_builder = PromptBuilder()
         self.last_report = None  # 保存最后一次报告
 
-    def research(
+        # 初始化工具注册中心和 ReAct 引擎
+        self.tool_registry = ToolRegistry()
+        for tool in create_research_tools(kb_manager, web_search):
+            self.tool_registry.register(tool)
+        
+        self.react_engine = ReActEngine(
+            llm_client=llm_client,
+            tool_registry=self.tool_registry,
+            max_iterations=10
+        )
+
+    def deep_research(self, question: str) -> Dict[str, Any]:
+        """
+        执行深度研究（ReAct 模式）
+
+        LLM 自主决策搜索、分析、总结的顺序，支持多轮迭代
+
+        Args:
+            question: 研究问题
+
+        Returns:
+            {
+                "answer": str,
+                "formatted_response": str,
+                "trajectory": ResearchTrajectory,
+                "iterations": int,
+                "status": str
+            }
+        """
+        # 重置证据追踪器
+        self.kb_manager.evidence_tracker.reset()
+
+        # 执行 ReAct 循环
+        result = self.react_engine.run(
+            question=question,
+            memory_history=self.memory.get_recent(4)
+        )
+
+        # 更新对话记忆
+        self.memory.add_user_message(question)
+        self.memory.add_assistant_message(result["answer"])
+
+        # 构建证据链
+        evidence_chain = self.kb_manager.get_evidence_chain()
+
+        # 格式化响应
+        formatted_response = self._format_react_response(result, evidence_chain)
+
+        # 保存报告
+        self.last_report = {
+            "question": question,
+            "formatted_response": formatted_response,
+            "timestamp": None
+        }
+
+        return {
+            "answer": result["answer"],
+            "formatted_response": formatted_response,
+            "trajectory": result.get("trajectory"),
+            "iterations": result["iterations"],
+            "status": result["status"],
+            "evidences": result.get("evidences", [])
+        }
+
+    def _format_react_response(self, result: Dict, evidence_chain: str) -> str:
+        """格式化 ReAct 研究结果"""
+        lines = []
+        lines.append("## 研究结论\n")
+        lines.append(result["answer"])
+        lines.append("\n")
+        
+        if evidence_chain:
+            lines.append("## 证据链\n")
+            lines.append(evidence_chain)
+            lines.append("\n")
+
+        lines.append("## 研究过程\n")
+        lines.append(f"- 状态: {result['status']}")
+        lines.append(f"- 迭代轮次: {result['iterations']}")
+        
+        trajectory = result.get("trajectory")
+        if trajectory and trajectory.steps:
+            lines.append(f"- 工具调用: {len(trajectory.steps)} 次")
+            tool_calls = [s.action_name for s in trajectory.steps]
+            lines.append(f"- 调用序列: {' → '.join(tool_calls)}")
+
+        return "\n".join(lines)
+
+    def legacy_research(
         self,
         question: str,
         use_web_search: bool = True,
         top_k: int = 5
     ) -> Dict[str, Any]:
         """
-        执行研究任务
+        执行研究任务（旧版固定流程）
 
         Args:
             question: 用户问题

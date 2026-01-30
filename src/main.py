@@ -20,14 +20,18 @@ def print_banner():
 ║           Deep Research Agent - 政策合规研究助手            ║
 ╠════════════════════════════════════════════════════════════╣
 ║  功能：本地知识库 + 网页搜索 + 证据链追溯                    ║
+║  模式：                                                     ║
+║    - 普通对话：直接输入问题（快速响应）                      ║
+║    - 深度研究：/research <问题>（ReAct自主决策流程）          ║
 ║  命令：                                                     ║
-║    - 输入问题进行研究                                       ║
-║    - /rebuild  重建知识库索引                               ║
-║    - /clear    清空对话历史                                 ║
-║    - /save     保存为Markdown报告                             ║
-║    - /pdf      保存为PDF报告                                  ║
-║    - /help     显示帮助信息                                 ║
-║    - quit/exit 退出程序                                     ║
+║    - /research     启动深度研究（ReAct模式，LLM自主决策）     ║
+║    - /research_v1  启动旧版研究（固定流程）                   ║
+║    - /rebuild      重建知识库索引                            ║
+║    - /clear        清空对话历史                              ║
+║    - /save         保存为Markdown报告                        ║
+║    - /pdf          保存为PDF报告                             ║
+║    - /help         显示帮助信息                              ║
+║    - quit/exit     退出程序                                  ║
 ╚════════════════════════════════════════════════════════════╝
 """)
 
@@ -36,18 +40,29 @@ def print_help():
     """打印帮助信息"""
     print("""
 可用命令：
-  /rebuild    - 重建知识库索引（当添加新文档后使用）
-  /clear      - 清空当前对话历史
-  /save       - 保存最后一次研究报告为 Markdown 文件
-  /pdf        - 保存最后一次研究报告为 PDF 文件
-  /status     - 显示系统状态
-  /help       - 显示此帮助信息
-  quit/exit   - 退出程序
+  /research <问题>    - 启动深度研究（ReAct模式，LLM自主决策工具调用）
+  /research_v1 <问题> - 启动旧版研究（固定7步流程）
+  /rebuild            - 重建知识库索引（当添加新文档后使用）
+  /clear              - 清空当前对话历史
+  /save               - 保存最后一次研究报告为 Markdown 文件
+  /pdf                - 保存最后一次研究报告为 PDF 文件
+  /status             - 显示系统状态
+  /help               - 显示此帮助信息
+  quit/exit           - 退出程序
 
-示例问题：
-  - 银行是否可以直接使用客户原始交易数据训练内部大模型？
-  - 基于大模型的自动授信/审批，是否必须保留人工干预？
-  - 银行内部使用大模型做客户经理辅助问答，日志要保存多久？
+使用方式：
+  1. 普通对话模式（默认）：
+     直接输入问题，快速获得回答，不调用工具和搜索
+     例如：你好
+           什么是大模型？
+
+  2. 深度研究模式（ReAct）：
+     使用 /research 命令启动，LLM自主决定搜索策略
+     例如：/research 银行是否可以直接使用客户原始交易数据训练内部大模型？
+
+  3. 旧版研究模式（固定流程）：
+     使用 /research_v1 命令启动固定的7步流程
+     例如：/research_v1 基于大模型的自动授信/审批，是否必须保留人工干预？
 """)
 
 
@@ -130,7 +145,9 @@ def main():
     )
 
     print("\n" + "="*60)
-    print("初始化完成！请输入您的研究问题：")
+    print("初始化完成！")
+    print("  - 普通对话：直接输入问题")
+    print("  - 深度研究：/research <问题>")
     print("="*60 + "\n")
 
     # 主循环
@@ -150,28 +167,62 @@ def main():
             break
 
         if user_input.startswith('/'):
-            handle_command(user_input, agent, kb_manager, str(doc_dir))
+            handle_command(user_input, agent, kb_manager, str(doc_dir), web_search)
             continue
 
-        # 执行研究
+        # 默认普通对话模式
         try:
-            result = agent.research(
-                question=user_input,
-                use_web_search=web_search.is_available(),
-                top_k=5
-            )
-
-            # 输出结果
-            print("\n" + result["formatted_response"])
+            print("\n[普通对话模式]")
+            response = agent.simple_chat(user_input)
+            print(f"\n{response}")
             print("\n" + "-"*60 + "\n")
 
         except Exception as e:
             print(f"\n错误: {e}\n")
 
 
-def handle_command(command: str, agent: ResearchAgent, kb_manager: KnowledgeBaseManager, doc_dir: str):
+def handle_command(command: str, agent: ResearchAgent, kb_manager: KnowledgeBaseManager, doc_dir: str, web_search: WebSearchTool = None):
     """处理命令"""
     cmd = command.lower().strip()
+    
+    # 处理 /research 命令（新版 ReAct 模式）
+    if cmd.startswith('/research') and not cmd.startswith('/research_v1'):
+        # 提取问题
+        question = command[9:].strip()  # 去掉 '/research ' 前缀
+        if not question:
+            print("请提供研究问题，例如：/research 银行是否可以使用客户数据训练模型？\n")
+            return
+        
+        # 执行深度研究（ReAct 模式）
+        try:
+            result = agent.deep_research(question=question)
+            # 输出结果
+            print("\n" + result["formatted_response"])
+            print("\n" + "-"*60 + "\n")
+        except Exception as e:
+            print(f"\n研究失败: {e}\n")
+            import traceback
+            traceback.print_exc()
+        return
+
+    # 处理 /research_v1 命令（旧版固定流程）
+    if cmd.startswith('/research_v1'):
+        question = command[12:].strip()  # 去掉 '/research_v1 ' 前缀
+        if not question:
+            print("请提供研究问题，例如：/research_v1 银行是否可以使用客户数据训练模型？\n")
+            return
+        
+        try:
+            result = agent.legacy_research(
+                question=question,
+                use_web_search=web_search.is_available() if web_search else False,
+                top_k=5
+            )
+            print("\n" + result["formatted_response"])
+            print("\n" + "-"*60 + "\n")
+        except Exception as e:
+            print(f"\n研究失败: {e}\n")
+        return
 
     if cmd == '/help':
         print_help()
