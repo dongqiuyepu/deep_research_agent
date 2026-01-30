@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
-from backend.core.models import ToolResult
+from backend.agent.core.common.models import ToolResult
 
 
 class BaseTool(ABC):
