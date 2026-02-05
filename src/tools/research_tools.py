@@ -20,8 +20,9 @@ class KBSearchTool(BaseTool):
         self.kb_manager = kb_manager
 
     def execute(self, query: str, top_k: int = 5) -> ToolResult:
-        evidences, evidence_text = self.kb_manager.search(query=query, top_k=top_k)
-        
+        evidences, evidence_text = self.kb_manager.search(
+            query=query, top_k=top_k)
+
         if not evidences:
             return ToolResult(
                 success=True,
@@ -58,7 +59,7 @@ class WebSearchTool(BaseTool):
             return ToolResult(success=False, error="网页搜索不可用")
 
         results = self.web_search.search(query, max_results=max_results)
-        
+
         if not results:
             return ToolResult(
                 success=True,
@@ -79,7 +80,7 @@ class WebSearchTool(BaseTool):
 
         evidence_ids = [e.evidence_id for e in evidences]
         evidence_text = self._format_evidences(evidences)
-        
+
         return ToolResult(
             success=True,
             data={"evidences": evidences, "text": evidence_text},
@@ -90,7 +91,7 @@ class WebSearchTool(BaseTool):
         lines = []
         for e in evidences:
             lines.append(f"[{e.evidence_id}] {e.source} (网页)")
-            lines.append(f"内容: {e.content[:300]}...")
+            lines.append(f"内容: {e.content}")
             lines.append("")
         return "\n".join(lines)
 

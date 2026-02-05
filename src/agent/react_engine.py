@@ -42,7 +42,7 @@ class ResearchTrajectory:
             lines.append(f"Thought: {step.thought}")
             lines.append(
                 f"Action: {step.action_name}({json.dumps(step.action_params, ensure_ascii=False)})")
-            lines.append(f"Observation: {step.observation[:500]}...")
+            lines.append(f"Observation: {step.observation}")
             if step.evidence_ids:
                 lines.append(f"证据: {', '.join(step.evidence_ids)}")
             lines.append("")
@@ -279,7 +279,7 @@ class ReActEngine:
         """强制生成答案（当达到最大轮次时）"""
         evidence_text = ""
         for e in evidences[:10]:  # 最多使用10条证据
-            evidence_text += f"[{e.evidence_id}] {e.content[:200]}...\n"
+            evidence_text += f"[{e.evidence_id}] {e.content}\n"
 
         prompt = f"""基于以下证据回答问题。
 

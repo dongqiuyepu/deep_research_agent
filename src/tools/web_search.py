@@ -152,7 +152,7 @@ class WebSearchTool:
         lines = []
         for i, r in enumerate(results, 1):
             lines.append(f"[网页{i}] {r.title}")
-            lines.append(f"内容: {r.content[:300]}")
+            lines.append(f"内容: {r.content}")
             lines.append(f"来源: {r.url}")
             lines.append("")
 

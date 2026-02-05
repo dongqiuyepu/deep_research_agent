@@ -61,7 +61,7 @@ class EvidenceTracker:
             evidence_id=evidence_id,
             source=metadata.get("file_name", "未知文档"),
             page=metadata.get("page_label", metadata.get("page", 0)),
-            content=node.get_content()[:500],  # 限制内容长度
+            content=node.get_content(),  # 不再限制内容长度
             score=round(node_with_score.score,
                         4) if node_with_score.score else 0.0,
             source_type="local"
@@ -98,7 +98,7 @@ class EvidenceTracker:
             evidence_id=evidence_id,
             source=title,
             page=0,
-            content=content[:500],  # 限制内容长度
+            content=content,  # 不再限制内容长度
             score=round(score, 4),
             source_type="web",
             url=url
