@@ -20,7 +20,7 @@ class TrajectoryStep:
     evidence_ids: List[str] = field(default_factory=list)
 
 
-@dataclass 
+@dataclass
 class ResearchTrajectory:
     """研究轨迹"""
     question: str
@@ -35,12 +35,13 @@ class ResearchTrajectory:
         """生成历史轨迹的Prompt文本"""
         if not self.steps:
             return ""
-        
+
         lines = ["== 研究轨迹 ==\n"]
         for step in self.steps:
             lines.append(f"[轮次 {step.iteration}]")
             lines.append(f"Thought: {step.thought}")
-            lines.append(f"Action: {step.action_name}({json.dumps(step.action_params, ensure_ascii=False)})")
+            lines.append(
+                f"Action: {step.action_name}({json.dumps(step.action_params, ensure_ascii=False)})")
             lines.append(f"Observation: {step.observation[:500]}...")
             if step.evidence_ids:
                 lines.append(f"证据: {', '.join(step.evidence_ids)}")
@@ -138,7 +139,7 @@ class ReActEngine:
             messages = [{"role": "user", "content": prompt}]
             if memory_history:
                 messages = [{"role": "system", "content": "你是一位研究专家。"}] + \
-                          memory_history[-4:] + messages
+                    memory_history[-4:] + messages
 
             # 2. 调用 LLM
             try:
@@ -164,15 +165,17 @@ class ReActEngine:
             tool_params = action.get("params", {})
 
             print(f"💭 Thought: {thought[:100]}...")
-            print(f"🔧 Action: {tool_name}({json.dumps(tool_params, ensure_ascii=False)})")
+            print(
+                f"🔧 Action: {tool_name}({json.dumps(tool_params, ensure_ascii=False)})")
 
             # 4. 执行工具
             result = self.registry.execute(tool_name, tool_params)
 
             # 5. 处理结果
             observation = self._format_observation(result)
-            evidence_ids = result.metadata.get("ids", []) if result.success else []
-            
+            evidence_ids = result.metadata.get(
+                "ids", []) if result.success else []
+
             print(f"📋 Observation: {observation[:200]}...")
 
             # 6. 记录轨迹
@@ -196,7 +199,7 @@ class ReActEngine:
                 answer = result.data.get("answer", "")
                 trajectory.final_answer = answer
                 trajectory.total_evidences = all_evidences
-                
+
                 print(f"\n✅ 研究完成 (轮次: {iteration})")
                 return {
                     "answer": answer,
@@ -208,9 +211,10 @@ class ReActEngine:
 
         # 达到最大轮次
         print(f"\n⚠️ 达到最大轮次限制 ({self.max_iterations})")
-        
+
         # 强制生成答案
-        forced_answer = self._force_generate_answer(question, trajectory, all_evidences)
+        forced_answer = self._force_generate_answer(
+            question, trajectory, all_evidences)
         trajectory.final_answer = forced_answer
         trajectory.total_evidences = all_evidences
 

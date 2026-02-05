@@ -29,6 +29,7 @@ def print_banner():
 ║    - /rebuild      重建知识库索引                            ║
 ║    - /clear        清空对话历史                              ║
 ║    - /save         保存为Markdown报告                        ║
+║    - /save_trace   保存带完整轨迹的Markdown报告              ║
 ║    - /pdf          保存为PDF报告                             ║
 ║    - /help         显示帮助信息                              ║
 ║    - quit/exit     退出程序                                  ║
@@ -45,6 +46,7 @@ def print_help():
   /rebuild            - 重建知识库索引（当添加新文档后使用）
   /clear              - 清空当前对话历史
   /save               - 保存最后一次研究报告为 Markdown 文件
+  /save_trace         - 保存带完整推理轨迹的 Markdown 报告
   /pdf                - 保存最后一次研究报告为 PDF 文件
   /status             - 显示系统状态
   /help               - 显示此帮助信息
@@ -167,7 +169,8 @@ def main():
             break
 
         if user_input.startswith('/'):
-            handle_command(user_input, agent, kb_manager, str(doc_dir), web_search)
+            handle_command(user_input, agent, kb_manager,
+                           str(doc_dir), web_search)
             continue
 
         # 默认普通对话模式
@@ -184,7 +187,7 @@ def main():
 def handle_command(command: str, agent: ResearchAgent, kb_manager: KnowledgeBaseManager, doc_dir: str, web_search: WebSearchTool = None):
     """处理命令"""
     cmd = command.lower().strip()
-    
+
     # 处理 /research 命令（新版 ReAct 模式）
     if cmd.startswith('/research') and not cmd.startswith('/research_v1'):
         # 提取问题
@@ -192,7 +195,7 @@ def handle_command(command: str, agent: ResearchAgent, kb_manager: KnowledgeBase
         if not question:
             print("请提供研究问题，例如：/research 银行是否可以使用客户数据训练模型？\n")
             return
-        
+
         # 执行深度研究（ReAct 模式）
         try:
             result = agent.deep_research(question=question)
@@ -211,7 +214,7 @@ def handle_command(command: str, agent: ResearchAgent, kb_manager: KnowledgeBase
         if not question:
             print("请提供研究问题，例如：/research_v1 银行是否可以使用客户数据训练模型？\n")
             return
-        
+
         try:
             result = agent.legacy_research(
                 question=question,
@@ -240,6 +243,10 @@ def handle_command(command: str, agent: ResearchAgent, kb_manager: KnowledgeBase
 
     elif cmd == '/save':
         agent.save_report()
+        print()
+
+    elif cmd == '/save_trace':
+        agent.save_report_with_trace()
         print()
 
     elif cmd == '/pdf':

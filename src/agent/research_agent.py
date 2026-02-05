@@ -37,16 +37,17 @@ class ResearchAgent:
         self.memory = memory
         self.prompt_builder = PromptBuilder()
         self.last_report = None  # 保存最后一次报告
+        self.last_trajectory = None  # 保存最后一次研究轨迹
 
         # 初始化工具注册中心和 ReAct 引擎
         self.tool_registry = ToolRegistry()
         for tool in create_research_tools(kb_manager, web_search):
             self.tool_registry.register(tool)
-        
+
         self.react_engine = ReActEngine(
             llm_client=llm_client,
             tool_registry=self.tool_registry,
-            max_iterations=10
+            max_iterations=50
         )
 
     def deep_research(self, question: str) -> Dict[str, Any]:
@@ -84,14 +85,16 @@ class ResearchAgent:
         evidence_chain = self.kb_manager.get_evidence_chain()
 
         # 格式化响应
-        formatted_response = self._format_react_response(result, evidence_chain)
+        formatted_response = self._format_react_response(
+            result, evidence_chain)
 
-        # 保存报告
+        # 保存报告和轨迹
         self.last_report = {
             "question": question,
             "formatted_response": formatted_response,
             "timestamp": None
         }
+        self.last_trajectory = result.get("trajectory")
 
         return {
             "answer": result["answer"],
@@ -108,7 +111,7 @@ class ResearchAgent:
         lines.append("## 研究结论\n")
         lines.append(result["answer"])
         lines.append("\n")
-        
+
         if evidence_chain:
             lines.append("## 证据链\n")
             lines.append(evidence_chain)
@@ -117,7 +120,7 @@ class ResearchAgent:
         lines.append("## 研究过程\n")
         lines.append(f"- 状态: {result['status']}")
         lines.append(f"- 迭代轮次: {result['iterations']}")
-        
+
         trajectory = result.get("trajectory")
         if trajectory and trajectory.steps:
             lines.append(f"- 工具调用: {len(trajectory.steps)} 次")
@@ -330,6 +333,90 @@ class ResearchAgent:
                 f.write(self.last_report['formatted_response'])
 
             print(f"✅ 报告已保存到: {os.path.abspath(filepath)}")
+            return True
+
+        except Exception as e:
+            print(f"❌ 保存报告失败: {e}")
+            return False
+
+    def save_report_with_trace(self, filepath: str = None) -> bool:
+        """
+        保存带完整推理轨迹的报告到 Markdown 文件
+
+        Args:
+            filepath: 保存路径,如果为 None 则自动生成
+
+        Returns:
+            是否成功保存
+        """
+        import os
+        from datetime import datetime
+
+        if not self.last_report:
+            print("错误:没有可保存的报告,请先进行一次研究")
+            return False
+
+        if not self.last_trajectory:
+            print("错误:当前报告没有轨迹数据,请使用 /research 命令进行深度研究")
+            return False
+
+        # 生成文件名
+        if not filepath:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            reports_dir = "./reports"
+            os.makedirs(reports_dir, exist_ok=True)
+            filepath = os.path.join(
+                reports_dir, f"report_trace_{timestamp}.md")
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                # 写入标题
+                f.write(f"# 深度研究报告（含完整轨迹）\n\n")
+                f.write(f"**问题**: {self.last_report['question']}\n\n")
+                f.write(
+                    f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write("---\n\n")
+
+                # 写入研究结论
+                f.write(self.last_report['formatted_response'])
+                f.write("\n\n")
+
+                # 写入完整推理轨迹
+                f.write("## 完整推理轨迹\n\n")
+                f.write(f"总轮次: {len(self.last_trajectory.steps)}\n\n")
+
+                for step in self.last_trajectory.steps:
+                    f.write(f"### 轮次 {step.iteration}\n\n")
+
+                    # Thought
+                    f.write(f"**💭 Thought (思考)**\n\n")
+                    f.write(f"{step.thought}\n\n")
+
+                    # Action
+                    f.write(f"**🔧 Action (行动)**\n\n")
+                    import json
+                    params_str = json.dumps(
+                        step.action_params, ensure_ascii=False, indent=2)
+                    f.write(f"- 工具: `{step.action_name}`\n")
+                    f.write(f"- 参数:\n```json\n{params_str}\n```\n\n")
+
+                    # Observation
+                    f.write(f"**📋 Observation (观察)**\n\n")
+                    f.write(f"{step.observation}\n\n")
+
+                    # Evidence IDs
+                    if step.evidence_ids:
+                        f.write(
+                            f"**📚 证据编号**: {', '.join(step.evidence_ids)}\n\n")
+
+                    f.write("---\n\n")
+
+                # 最终答案
+                if self.last_trajectory.final_answer:
+                    f.write("## 最终答案\n\n")
+                    f.write(f"{self.last_trajectory.final_answer}\n\n")
+
+            print(f"✅ 带轨迹的报告已保存到: {os.path.abspath(filepath)}")
             return True
 
         except Exception as e:
