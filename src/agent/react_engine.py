@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from tools.tool_registry import ToolRegistry
 from tools.base_tool import ToolResult
+from agent.task_queue import TaskQueue
 
 
 @dataclass
@@ -61,6 +62,13 @@ REACT_SYSTEM_PROMPT = """你是一位资深的研究专家，擅长通过工具�
 3. Observation: 工具执行结果（由系统提供）
 4. 重复以上步骤，直到收集足够证据
 
+## 任务分解与队列管理
+- 使用 decompose 工具将复杂问题分解为子问题（自动入队，子问题也可继续分解）
+- 使用 resolve_task 工具标记当前子任务完成（自动切换到下一个）
+- 所有子任务完成后，使用 finish 工具生成综合性答案
+
+{queue_status}
+
 ## 输出格式
 每次回复必须严格遵守以下JSON格式：
 ```json
@@ -78,9 +86,10 @@ REACT_SYSTEM_PROMPT = """你是一位资深的研究专家，擅长通过工具�
 2. 优先使用 kb_search 搜索本地知识库
 3. 如果本地证据不足，使用 web_search 搜索网页
 4. 可以使用 decompose 将复杂问题分解为子问题
-5. 当证据充分时，调用 finish 工具返回最终答案
-6. 答案中必须引用证据编号 [EVD-XXX]
-7. 区分"强制性要求"和"审慎性建议"
+5. 当前子任务证据充分时，调用 resolve_task 标记完成
+6. 所有子任务完成后，调用 finish 工具返回最终答案
+7. 答案中必须引用证据编号 [EVD-XXX]
+8. 区分"强制性要求"和"审慎性建议"
 
 ## 当前任务
 问题: {question}
@@ -102,6 +111,7 @@ class ReActEngine:
         self.llm = llm_client
         self.registry = tool_registry
         self.max_iterations = max_iterations
+        self.task_queue = TaskQueue()
 
     def run(self, question: str, memory_history: List[Dict] = None) -> Dict[str, Any]:
         """
@@ -122,6 +132,11 @@ class ReActEngine:
         trajectory = ResearchTrajectory(question=question)
         all_evidences = []
 
+        # 初始化任务队列
+        self.task_queue.reset()
+        self.task_queue.enqueue(question, parent_id="ROOT", iteration=0)
+        self.task_queue.dequeue()  # 开始处理根任务
+
         print(f"\n{'='*60}")
         print(f"🔬 开始深度研究: {question}")
         print(f"{'='*60}")
@@ -130,9 +145,14 @@ class ReActEngine:
             print(f"\n[轮次 {iteration}/{self.max_iterations}]")
 
             # 1. 构建 Prompt
+            queue_status = ""
+            if self.task_queue.current_task or self.task_queue.queue or self.task_queue.completed_tasks:
+                queue_status = self.task_queue.get_queue_summary()
+
             prompt = REACT_SYSTEM_PROMPT.format(
                 tools_prompt=self.registry.get_tools_prompt(),
                 question=question,
+                queue_status=queue_status,
                 history=trajectory.get_history_prompt()
             )
 
@@ -161,6 +181,12 @@ class ReActEngine:
 
             thought = parsed.get("thought", "")
             action = parsed.get("action", {})
+
+            # 防御性检查：确保 action 是字典类型
+            if not isinstance(action, dict):
+                print(f"⚠️ action 格式错误 (类型: {type(action).__name__})，重试...")
+                continue
+
             tool_name = action.get("tool", "")
             tool_params = action.get("params", {})
 
@@ -170,6 +196,39 @@ class ReActEngine:
 
             # 4. 执行工具
             result = self.registry.execute(tool_name, tool_params)
+
+            # === 任务队列钩子 ===
+            # decompose 工具：子问题入队
+            if tool_name == "decompose" and result.success:
+                sub_questions = result.data.get("sub_questions", [])
+                parent_id = self.task_queue.current_task.task_id if self.task_queue.current_task else "ROOT"
+                for sub_q in sub_questions:
+                    self.task_queue.enqueue(
+                        sub_q, parent_id=parent_id, iteration=iteration)
+                print(f"📋 已将 {len(sub_questions)} 个子问题加入队列")
+
+            # 搜索工具：证据关联到当前任务
+            if tool_name in ["kb_search", "web_search"] and result.success:
+                new_evidence_ids = result.metadata.get("ids", [])
+                if new_evidence_ids:
+                    self.task_queue.add_evidence_to_current(new_evidence_ids)
+
+            # resolve_task 工具：完成当前任务并切换
+            if tool_name == "resolve_task" and result.success:
+                answer = result.data.get("answer", "")
+                current_evidence_ids = self.task_queue.current_task.evidence_ids if self.task_queue.current_task else []
+                self.task_queue.resolve_current(
+                    answer, current_evidence_ids, iteration)
+                total_tasks = len(self.task_queue.completed_tasks) + len(
+                    self.task_queue.queue) + (1 if self.task_queue.current_task else 0)
+                print(
+                    f"✅ 子任务完成，进度: {len(self.task_queue.completed_tasks)}/{total_tasks}")
+
+                # 切换到下一个任务
+                if not self.task_queue.is_empty():
+                    next_task = self.task_queue.dequeue()
+                    print(f"🔄 切换到: [{next_task.task_id}] {next_task.question}")
+            # === 钩子结束 ===
 
             # 5. 处理结果
             observation = self._format_observation(result)
@@ -196,6 +255,16 @@ class ReActEngine:
 
             # 7. 检查终止条件
             if tool_name == "finish" and result.success:
+                # 检查是否还有未完成的任务（包括队列中的任务和当前正在处理的任务）
+                remaining_count = len(self.task_queue.queue)
+                if self.task_queue.current_task is not None:
+                    remaining_count += 1
+
+                if remaining_count > 0:
+                    print(
+                        f"⚠️ 还有 {remaining_count} 个任务待处理（队列: {len(self.task_queue.queue)}, 当前: {'1' if self.task_queue.current_task else '0'}），继续研究")
+                    continue
+
                 answer = result.data.get("answer", "")
                 trajectory.final_answer = answer
                 trajectory.total_evidences = all_evidences
@@ -261,8 +330,10 @@ class ReActEngine:
         if isinstance(data, dict):
             if "text" in data:
                 return data["text"]
-            if "answer" in data:
+            if "answer" in data and data.get("is_final"):
                 return f"最终答案: {data['answer']}"
+            if "answer" in data:
+                return f"子任务答案: {data['answer']}"
             if "sub_questions" in data:
                 return f"分解为 {len(data['sub_questions'])} 个子问题: {data['sub_questions']}"
             if "assessment" in data:

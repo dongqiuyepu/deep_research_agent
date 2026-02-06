@@ -170,6 +170,30 @@ class FinishTool(BaseTool):
         )
 
 
+class ResolveTaskTool(BaseTool):
+    """任务完成工具 - 标记当前子任务已解决"""
+
+    name = "resolve_task"
+    description = "标记当前子任务已完成，提供该子任务的答案"
+    parameters = {
+        "properties": {
+            "answer": {"type": "string", "description": "子任务的答案，需引用[EVD-XXX]"},
+            "confidence": {"type": "number", "description": "答案置信度(0-1)"}
+        },
+        "required": ["answer"]
+    }
+
+    def execute(self, answer: str, confidence: float = 0.8) -> ToolResult:
+        return ToolResult(
+            success=True,
+            data={
+                "answer": answer,
+                "confidence": confidence
+            },
+            metadata={"action": "resolve_task"}
+        )
+
+
 def create_research_tools(kb_manager, web_search) -> List[BaseTool]:
     """创建所有研究工具"""
     return [
@@ -177,5 +201,6 @@ def create_research_tools(kb_manager, web_search) -> List[BaseTool]:
         WebSearchTool(web_search, kb_manager),
         DecomposeTool(),
         EvaluateTool(),
+        ResolveTaskTool(),
         FinishTool()
     ]
