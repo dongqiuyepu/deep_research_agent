@@ -144,11 +144,110 @@ class VectorStore:
 
         return results
 
+    def add_nodes(self, nodes: List) -> bool:
+        """
+        添加新节点到现有索引（增量更新）
+
+        Args:
+            nodes: 新的文档节点列表
+
+        Returns:
+            是否成功添加
+        """
+        if not nodes:
+            print("节点列表为空，无需添加")
+            return False
+
+        try:
+            # 如果索引不存在，则创建新索引
+            if self.index is None:
+                print("索引不存在，将创建新索引")
+                return self.build_index(nodes) is not None
+
+            # 将新节点插入现有索引
+            for node in nodes:
+                self.index.insert_nodes([node])
+
+            print(f"成功添加 {len(nodes)} 个节点到索引")
+            return True
+
+        except Exception as e:
+            print(f"添加节点失败: {e}")
+            return False
+
+    def get_indexed_files(self) -> set:
+        """
+        获取已索引的文件名列表
+
+        Returns:
+            文件名集合
+        """
+        try:
+            collection = self.chroma_client.get_collection(
+                name=self.collection_name)
+
+            # 获取所有文档的元数据
+            result = collection.get(include=["metadatas"])
+
+            # 提取文件名
+            file_names = set()
+            if result and "metadatas" in result:
+                for metadata in result["metadatas"]:
+                    if metadata and "file_name" in metadata:
+                        file_names.add(metadata["file_name"])
+
+            return file_names
+
+        except Exception as e:
+            print(f"获取已索引文件列表失败: {e}")
+            return set()
+
+    def get_stats(self) -> dict:
+        """
+        获取索引统计信息
+
+        Returns:
+            统计信息字典
+        """
+        try:
+            collection = self.chroma_client.get_collection(
+                name=self.collection_name)
+            count = collection.count()
+
+            # 获取已索引的文件
+            indexed_files = self.get_indexed_files()
+
+            return {
+                "status": "已初始化" if self.index else "未加载",
+                "total_chunks": count,
+                "indexed_files": len(indexed_files),
+                "file_list": sorted(list(indexed_files))
+            }
+        except Exception as e:
+            return {"status": "错误", "error": str(e)}
+
     def clear_index(self):
         """清除索引"""
         try:
+            # 删除 Collection（逻辑删除）
             self.chroma_client.delete_collection(name=self.collection_name)
             self.index = None
             print("索引已清除")
+
+            # 物理删除持久化目录中的所有 UUID 子目录
+            # ChromaDB 不会自动清理已删除 Collection 的目录
+            persist_path = Path(self.persist_dir)
+            if persist_path.exists():
+                # 遍历所有子目录
+                for item in persist_path.iterdir():
+                    # 跳过非目录项和 chroma.sqlite3 等数据库文件
+                    if item.is_dir() and len(item.name) == 36 and '-' in item.name:
+                        # 根据 UUID 格式判断（标准格式：8-4-4-4-12）
+                        try:
+                            import shutil
+                            shutil.rmtree(item)
+                            print(f"已删除旧的 Collection 目录: {item.name}")
+                        except Exception as dir_err:
+                            print(f"删除目录失败 {item.name}: {dir_err}")
         except Exception as e:
             print(f"清除索引失败: {e}")

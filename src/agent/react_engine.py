@@ -65,7 +65,10 @@ REACT_SYSTEM_PROMPT = """你是一位资深的研究专家，擅长通过工具�
 ## 任务分解与队列管理
 - 使用 decompose 工具将复杂问题分解为子问题（自动入队，子问题也可继续分解）
 - 使用 resolve_task 工具标记当前子任务完成（自动切换到下一个）
-- 所有子任务完成后，使用 finish 工具生成综合性答案
+- ⚠️ **重要**：当父任务的所有子任务完成后，父任务会自动恢复为当前任务
+  - 此时必须先调用 resolve_task 完成父任务（基于子任务的答案进行汇总）
+  - 然后系统会自动切换，如果没有更多任务，再调用 finish
+- 只有当队列完全为空（没有待处理任务，没有当前任务）时，才能调用 finish
 
 {queue_status}
 
@@ -87,9 +90,10 @@ REACT_SYSTEM_PROMPT = """你是一位资深的研究专家，擅长通过工具�
 3. 如果本地证据不足，使用 web_search 搜索网页
 4. 可以使用 decompose 将复杂问题分解为子问题
 5. 当前子任务证据充分时，调用 resolve_task 标记完成
-6. 所有子任务完成后，调用 finish 工具返回最终答案
-7. 答案中必须引用证据编号 [EVD-XXX]
-8. 区分"强制性要求"和"审慎性建议"
+6. 当父任务的所有子任务完成时，父任务会自动成为当前任务，此时必须先调用 resolve_task 完成父任务
+7. 只有当队列完全为空（current_task=None, queue=空）时，才能调用 finish 工具返回最终答案
+8. 答案中必须引用证据编号 [EVD-XXX]
+9. 区分“强制性要求”和“审慎性建议”
 
 ## 当前任务
 问题: {question}
@@ -180,7 +184,12 @@ class ReActEngine:
                 continue
 
             thought = parsed.get("thought", "")
-            action = parsed.get("action", {})
+            action = parsed.get("action")
+
+            # 防御性检查：action 不能缺失或为 None
+            if action is None:
+                print(f"⚠️ action 字段缺失或为 null，重试...")
+                continue
 
             # 防御性检查：确保 action 是字典类型
             if not isinstance(action, dict):
@@ -198,14 +207,36 @@ class ReActEngine:
             result = self.registry.execute(tool_name, tool_params)
 
             # === 任务队列钩子 ===
-            # decompose 工具：子问题入队
+            # decompose 工具：子问题入队，父任务挂起
             if tool_name == "decompose" and result.success:
                 sub_questions = result.data.get("sub_questions", [])
                 parent_id = self.task_queue.current_task.task_id if self.task_queue.current_task else "ROOT"
+
+                # 将子问题入队，并记录到父任务的 subtask_ids
                 for sub_q in sub_questions:
-                    self.task_queue.enqueue(
+                    sub_task = self.task_queue.enqueue(
                         sub_q, parent_id=parent_id, iteration=iteration)
+                    # 将子任务ID添加到父任务的追踪列表
+                    if self.task_queue.current_task:
+                        self.task_queue.add_subtask_to_current(
+                            sub_task.task_id)
+
                 print(f"📋 已将 {len(sub_questions)} 个子问题加入队列")
+
+                # 如果当前任务存在 且 不是根任务
+                if self.task_queue.current_task and parent_id != "ROOT":
+                    self.task_queue.current_task.status = "waiting_for_subtasks"
+                    waiting_parent = self.task_queue.current_task
+                    # 将父任务注册为挂起状态（不进入队列，等待子任务完成）
+                    self.task_queue.register_waiting_parent(waiting_parent)
+                    self.task_queue.current_task = None
+                    print(f"🔄 父任务 [{waiting_parent.task_id}] 已挂起，等待子任务完成")
+
+                    # 自动切换到下一个任务（即第一个子任务）
+                    if not self.task_queue.is_empty():
+                        next_task = self.task_queue.dequeue()
+                        print(
+                            f"🔄 切换到: [{next_task.task_id}] {next_task.question}")
 
             # 搜索工具：证据关联到当前任务
             if tool_name in ["kb_search", "web_search"] and result.success:
@@ -217,17 +248,62 @@ class ReActEngine:
             if tool_name == "resolve_task" and result.success:
                 answer = result.data.get("answer", "")
                 current_evidence_ids = self.task_queue.current_task.evidence_ids if self.task_queue.current_task else []
+
+                # 关键校验：按任务类型分别处理
+                if self.task_queue.current_task:
+                    current = self.task_queue.current_task
+
+                    # 情形 1：叶子任务 - 直接允许 resolve
+                    if self.task_queue.is_leaf_task(current):
+                        pass  # 叶子任务可以直接 resolve
+
+                    # 情形 2：父任务 - 需要递归检查所有后代叶子节点
+                    elif current.subtask_ids:
+                        if not self.task_queue.are_all_descendant_leaves_resolved(current):
+                            # 还有后代叶子任务未完成，拒绝 resolve
+                            remaining_subtasks = self.task_queue.get_remaining_subtasks(
+                                current)
+                            error_msg = f"拒绝 resolve_task: 当前父任务 [{current.task_id}] 的后代叶子任务未全部完成。直接子任务: {remaining_subtasks}。请确保所有叶子节点都已完成。"
+                            result = ToolResult(success=False, error=error_msg)
+                            observation = self._format_observation(result)
+                            print(f"⚠️ {error_msg}")
+
+                            # 记录这个失败的 resolve 尝试
+                            step = TrajectoryStep(
+                                iteration=iteration,
+                                thought=thought,
+                                action_name=tool_name,
+                                action_params=tool_params,
+                                observation=observation,
+                                evidence_ids=[]
+                            )
+                            trajectory.add_step(step)
+                            continue
+
+                # 执行 resolve 操作
+                resolved_task = self.task_queue.current_task
                 self.task_queue.resolve_current(
                     answer, current_evidence_ids, iteration)
-                total_tasks = len(self.task_queue.completed_tasks) + len(
-                    self.task_queue.queue) + (1 if self.task_queue.current_task else 0)
-                print(
-                    f"✅ 子任务完成，进度: {len(self.task_queue.completed_tasks)}/{total_tasks}")
 
-                # 切换到下一个任务
+                # 提升已就绪的父/祖先任务到队列
+                if resolved_task and resolved_task.parent_task_id != "ROOT":
+                    self.task_queue.promote_ready_parents_from(resolved_task)
+
+                # 统计叶子任务进度
+                completed_count, total_count = self.task_queue.get_leaf_task_progress()
+                if total_count > 0:
+                    print(f"✅ 叶子任务完成，进度: {completed_count}/{total_count}")
+
+                # 切换到下一个任务（队列中只包含可执行任务）
                 if not self.task_queue.is_empty():
-                    next_task = self.task_queue.dequeue()
-                    print(f"🔄 切换到: [{next_task.task_id}] {next_task.question}")
+                    self.task_queue.dequeue()
+
+                # 检查是否找到了可执行任务
+                if self.task_queue.current_task:
+                    print(
+                        f"🔄 切换到: [{self.task_queue.current_task.task_id}] {self.task_queue.current_task.question}")
+                else:
+                    print("⚠️ 当前没有可执行任务（可能是所有任务已完成）")
             # === 钩子结束 ===
 
             # 5. 处理结果
@@ -261,8 +337,22 @@ class ReActEngine:
                     remaining_count += 1
 
                 if remaining_count > 0:
-                    print(
-                        f"⚠️ 还有 {remaining_count} 个任务待处理（队列: {len(self.task_queue.queue)}, 当前: {'1' if self.task_queue.current_task else '0'}），继续研究")
+                    # 将 finish 结果改为失败状态，生成明确的错误提示
+                    error_msg = f"拒绝 finish: 还有 {remaining_count} 个任务待处理（队列: {len(self.task_queue.queue)}, 当前: {'1' if self.task_queue.current_task else '0'}）。请先使用 resolve_task 完成当前任务，或继续处理队列中的任务。"
+                    result = ToolResult(success=False, error=error_msg)
+                    observation = self._format_observation(result)
+                    print(f"⚠️ {error_msg}")
+
+                    # 重新记录这个失败的 finish 尝试到轨迹
+                    step = TrajectoryStep(
+                        iteration=iteration,
+                        thought=thought,
+                        action_name=tool_name,
+                        action_params=tool_params,
+                        observation=observation,
+                        evidence_ids=[]
+                    )
+                    trajectory.add_step(step)
                     continue
 
                 answer = result.data.get("answer", "")

@@ -26,7 +26,9 @@ def print_banner():
 ║  命令：                                                     ║
 ║    - /research     启动深度研究（ReAct模式，LLM自主决策）     ║
 ║    - /research_v1  启动旧版研究（固定流程）                   ║
-║    - /rebuild      重建知识库索引                            ║
+║    - /rebuild      完全重建知识库索引（慎用）                ║
+║    - /add          增量添加新文档（推荐）                    ║
+║    - /stats        查看知识库统计信息                        ║
 ║    - /clear        清空对话历史                              ║
 ║    - /save         保存为Markdown报告                        ║
 ║    - /save_trace   保存带完整轨迹的Markdown报告              ║
@@ -43,7 +45,9 @@ def print_help():
 可用命令：
   /research <问题>    - 启动深度研究（ReAct模式，LLM自主决策工具调用）
   /research_v1 <问题> - 启动旧版研究（固定7步流程）
-  /rebuild            - 重建知识库索引（当添加新文档后使用）
+  /rebuild            - 完全重建知识库索引（清空旧数据，重新处理所有文档）
+  /add                - 增量添加新文档到知识库（只处理新文件，不影响已有数据）
+  /stats              - 显示知识库统计信息（文档数量、文件列表等）
   /clear              - 清空当前对话历史
   /save               - 保存最后一次研究报告为 Markdown 文件
   /save_trace         - 保存带完整推理轨迹的 Markdown 报告
@@ -65,6 +69,11 @@ def print_help():
   3. 旧版研究模式（固定流程）：
      使用 /research_v1 命令启动固定的7步流程
      例如：/research_v1 基于大模型的自动授信/审批，是否必须保留人工干预？
+  
+  4. 知识库管理：
+     - 添加新文档后使用 /add 进行增量更新（推荐）
+     - 修改切片参数或索引损坏时使用 /rebuild 完全重建
+     - 使用 /stats 查看当前索引状态
 """)
 
 
@@ -236,10 +245,30 @@ def handle_command(command: str, agent: ResearchAgent, kb_manager: KnowledgeBase
 
     elif cmd == '/rebuild':
         print("正在重建知识库索引...")
+        print("⚠ 警告：这将删除所有已有索引并重新处理所有文档")
         if kb_manager.rebuild_index(doc_dir):
-            print("知识库索引重建完成\n")
+            print("✓ 知识库索引重建完成\n")
         else:
-            print("知识库索引重建失败\n")
+            print("✗ 知识库索引重建失败\n")
+
+    elif cmd == '/add':
+        print("正在增量更新知识库...")
+        if kb_manager.add_documents(doc_dir):
+            print("✓ 知识库增量更新完成\n")
+        else:
+            print("✗ 知识库增量更新失败\n")
+
+    elif cmd == '/stats':
+        print("\n知识库统计信息:")
+        stats = kb_manager.get_index_stats()
+        for key, value in stats.items():
+            if key == "file_list":
+                print(f"  已索引文件:")
+                for fname in value:
+                    print(f"    - {fname}")
+            else:
+                print(f"  {key}: {value}")
+        print()
 
     elif cmd == '/save':
         agent.save_report()

@@ -47,7 +47,7 @@ class ResearchAgent:
         self.react_engine = ReActEngine(
             llm_client=llm_client,
             tool_registry=self.tool_registry,
-            max_iterations=50
+            max_iterations=100
         )
 
     def deep_research(self, question: str) -> Dict[str, Any]:
@@ -246,27 +246,6 @@ class ResearchAgent:
             lines.append("")
 
         return "\n".join(lines)
-
-    def extract_evidence_ids(self, text: str) -> List[str]:
-        """
-        从文本中提取证据ID
-
-        Args:
-            text: 包含 [EVD-XXX] 引用的文本
-
-        Returns:
-            证据ID列表
-        """
-        pattern = r'\[EVD-\d{3}\]'
-        matches = re.findall(pattern, text)
-        # 去重并保持顺序
-        seen = set()
-        unique = []
-        for m in matches:
-            if m not in seen:
-                seen.add(m)
-                unique.append(m.strip('[]'))
-        return unique
 
     def simple_chat(self, message: str) -> str:
         """
